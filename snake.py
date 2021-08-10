@@ -1,20 +1,21 @@
 #Snake Tutorial Python
- 
+import tensorflow as tf
 import math
+import numpy as np
 import random
+
 import pygame
 import tkinter as tk
-import numpy as np
 from tkinter import messagebox
+
 from utils import *
- 
+
+
 PLAYER_TYPE = "IA"
 
 
+
 if PLAYER_TYPE == "IA": from ia import Policy
-
-
-
 
 class cube(object):    
     global rows, width
@@ -70,16 +71,15 @@ class snake(object):
             keys = pygame.key.get_pressed()
 
         elif PLAYER_TYPE == "IA":
+            #We here let the AI read the current state, do what it has to do (learn?, memorize?) and ask it to answer with an action vector
             state = readState()
             actionsVectorOneHotEncoded = policy(state)  #[0 0 1 0]
             keyNumbers = [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN]
             keys = {keyNumbers[k] : actionsVectorOneHotEncoded[k] for k in range(4)}
             
 
-        # print([bp.pos for bp in self.body])
 
         # Move accordingly to  action chosen
-        # for key in keys:
         if keys[pygame.K_LEFT]:
             self.dirnx = -1
             self.dirny = 0
@@ -212,23 +212,24 @@ def readState():
     arrayBody = np.array(np.zeros((rows, rows)))
     arraySnack = np.array(np.zeros((rows, rows)))
     
-    print("HEAD", s.head.pos)
     arrayHead[s.head.pos[0],s.head.pos[1]] = 1
     for bodyPart in s.body:
-        print("body", bodyPart.pos)
         arrayBody[bodyPart.pos[0], bodyPart.pos[1]] = 1
     arraySnack[snack.pos[0], snack.pos[1]] = 1
 
     return np.vstack((arrayHead, arrayBody, arraySnack)).flatten()
 
 
-if PLAYER_TYPE == "IA": policy = Policy()
+
+
+delay = True
+if PLAYER_TYPE == "IA": policy = Policy(newNN = True)
 
 def main():
     global width, rows, s, snack
 
     width = 500
-    rows = 2  
+    rows = 4
     win = pygame.display.set_mode((width, width))
     s = snake((255,0,0), (rows//2,rows//2))
     snack = cube(randomSnack(rows, s), color=(0,255,0))
@@ -237,11 +238,14 @@ def main():
     clock = pygame.time.Clock()
    
     while flag:
-        pygame.time.delay(50)
-        clock.tick(10)
+        if delay: pygame.time.delay(50)
+        #clock.tick(10)
+
+        #Here,  s.move() will call for the policy, given the current state.
         s.move()
+
+        #If the snake meet a snack, he gains a piece of body, a new snack is generated and AI get rewarded of 1.
         if s.body[0].pos == snack.pos:
-            print("MIAM !")
             if len(s.body) >= rows**2 - 2: #If map is full of the body, game end
                 gameEnd = True
             s.addCube()
@@ -250,9 +254,10 @@ def main():
         else:
             if PLAYER_TYPE == "IA": policy.getReward(0)
  
+        #If snack meet his own body, the game end.
         for x in range(len(s.body)):
             if gameEnd or s.body[x].pos in list(map(lambda z:z.pos,s.body[x+1:])):
-                print(f'Score: , {len(s.body)}')
+                print(f'Fin de la partie, score: , {len(s.body)}')
                 if PLAYER_TYPE == "HUMAN": message_box('You Lost!', 'Play again...')
                 if PLAYER_TYPE == "IA": policy.episodeEnd()
                 s.reset((rows//2,rows//2))
