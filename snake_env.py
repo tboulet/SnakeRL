@@ -1,8 +1,9 @@
 #Snake Tutorial Python
-import tensorflow as tf
+import gym
 import math
 import numpy as np
 import random
+import matplotlib.pyplot as plt
 
 import pygame
 import tkinter as tk
@@ -12,18 +13,16 @@ from utils import *
 
 
 PLAYER_TYPE = "IA"
-
-
-
-if PLAYER_TYPE == "IA": from ia import Policy
+n_actions = 4
+rows = 5
+width = 500
 
 class cube(object):    
-    global rows, width
 
     def __init__(self,start,dirnx=1,dirny=0,color=(255,0,0)):
         self.pos = start
-        self.rows = rows
         self.w = width
+        self.rows = rows
         self.dirnx = 1
         self.dirny = 0
         self.color = color
@@ -35,7 +34,7 @@ class cube(object):
         self.pos = (self.pos[0] + self.dirnx, self.pos[1] + self.dirny)
  
     def draw(self, surface, eyes=False):
-        dis = self.w // self.rows
+        dis = self.w // rows
         i = self.pos[0]
         j = self.pos[1]
  
@@ -59,25 +58,15 @@ class snake(object):
         self.dirnx = 0
         self.dirny = 1
  
-    def move(self):
+    def move(self, action):
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
             
-
         #Choose action
-        if PLAYER_TYPE == "HUMAN":
-            keys = pygame.key.get_pressed()
-
-        elif PLAYER_TYPE == "IA":
-            #We here let the AI read the current state, do what it has to do (learn?, memorize?) and ask it to answer with an action vector
-            state = readState()
-            actionsVectorOneHotEncoded = policy(state)  #[0 0 1 0]
-            keyNumbers = [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN]
-            keys = {keyNumbers[k] : actionsVectorOneHotEncoded[k] for k in range(4)}
-            
-
+        keyNumbers = [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN]
+        keys = {keyNumbers[k] : int(k == action) for k in range(n_actions)}
 
         # Move accordingly to  action chosen
         if keys[pygame.K_LEFT]:
@@ -157,7 +146,10 @@ class snake(object):
             else:
                 c.draw(surface)
  
- 
+
+
+
+
 def drawGrid(w, rows, surface): 
     sizeBtwn = w // rows
  
@@ -170,14 +162,8 @@ def drawGrid(w, rows, surface):
         pygame.draw.line(surface, (255,255,255), (x,0),(x,w))
         pygame.draw.line(surface, (255,255,255), (0,y),(w,y))
        
- 
-def redrawWindow(surface):
-    global rows, width, s, snack
-    surface.fill((0,0,0))
-    s.draw(surface)
-    snack.draw(surface)
-    drawGrid(width,rows, surface)
-    pygame.display.update()
+#  state = readState() 
+
  
  
 def randomSnack(rows, item):
@@ -194,82 +180,79 @@ def randomSnack(rows, item):
        
     return (x,y)
  
- 
-def message_box(subject, content):
-    root = tk.Tk()
-    root.attributes("-topmost", True)
-    root.withdraw()
-    messagebox.showinfo(subject, content)
-    try:
-        root.destroy()
-    except:
-        pass
- 
 
-def readState():
-    global s, snack, rows, width
-    arrayHead = np.array(np.zeros((rows, rows)))
-    arrayBody = np.array(np.zeros((rows, rows)))
-    arraySnack = np.array(np.zeros((rows, rows)))
+
+doDelay = False
+snackReward = 30
+nothingReward = -1
+deathReward = 0
+delay = 200
+GREEN = (0,255,0)
+RED = (255,0,0)
+
+class SnakeEnv(gym.Env):
+    metadata = {'render.modes': ['human']}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.win = pygame.display.set_mode((width, width))
+        self.snake = snake(RED, (rows//2,rows//2))
+        self.snack = cube(randomSnack(rows, self.snake), color=GREEN)
+        
     
-    arrayHead[s.head.pos[0],s.head.pos[1]] = 1
-    for bodyPart in s.body:
-        arrayBody[bodyPart.pos[0], bodyPart.pos[1]] = 1
-    arraySnack[snack.pos[0], snack.pos[1]] = 1
-
-    return np.vstack((arrayHead, arrayBody, arraySnack)).flatten()
-
-
-
-
-delay = True
-if PLAYER_TYPE == "IA": policy = Policy(newNN = True)
-
-def main():
-    global width, rows, s, snack
-
-    width = 500
-    rows = 4
-    win = pygame.display.set_mode((width, width))
-    s = snake((255,0,0), (rows//2,rows//2))
-    snack = cube(randomSnack(rows, s), color=(0,255,0))
-    flag = True
-    gameEnd = False
-    clock = pygame.time.Clock()
-   
-    while flag:
-        if delay: pygame.time.delay(50)
-        #clock.tick(10)
+    def step(self, action):
+        done = False
+        s = self.snake
 
         #Here,  s.move() will call for the policy, given the current state.
-        s.move()
+        s.move(action)
+
+        #If snack meet his own body, the game end.
+        for x in range(len(s.body)): 
+            if s.body[x].pos in list(map(lambda z:z.pos,s.body[x+1:])):
+                reward = deathReward
+                s.reset((rows//2,rows//2))
+                done = True
+                break
 
         #If the snake meet a snack, he gains a piece of body, a new snack is generated and AI get rewarded of 1.
-        if s.body[0].pos == snack.pos:
+        if not done and s.body[0].pos == self.snack.pos:
             if len(s.body) >= rows**2 - 2: #If map is full of the body, game end
-                gameEnd = True
+                done = True
             s.addCube()
-            snack = cube(randomSnack(rows, s), color=(0,255,0))
-            if PLAYER_TYPE == "IA": policy.getReward(1)
+            self.snack = cube(randomSnack(rows, s), color=GREEN)
+            reward = snackReward
         else:
-            if PLAYER_TYPE == "IA": policy.getReward(0)
- 
-        #If snack meet his own body, the game end.
-        for x in range(len(s.body)):
-            if gameEnd or s.body[x].pos in list(map(lambda z:z.pos,s.body[x+1:])):
-                print(f'Fin de la partie, score: , {len(s.body)}')
-                if PLAYER_TYPE == "HUMAN": message_box('You Lost!', 'Play again...')
-                if PLAYER_TYPE == "IA": policy.episodeEnd()
-                s.reset((rows//2,rows//2))
-                gameEnd = False
-                break
- 
-           
-        redrawWindow(win)
- 
-       
-    pass
- 
- 
- 
-main()
+            reward = nothingReward
+        # self.redrawWindow()
+
+        next_obs = self.readState()
+        info = dict()
+        return next_obs, reward, done, info
+
+
+    def reset(self):
+        self.snake.reset((rows//2,rows//2))
+        obs = self.readState()
+        return obs
+    
+    def render(self):
+        surface = self.win
+        surface.fill((0,0,0))
+        self.snake.draw(surface)
+        self.snack.draw(surface)
+        drawGrid(width,rows, surface)
+        pygame.display.update()
+    
+    def readState(self):
+        arr = np.array(np.zeros((3, rows, rows)), dtype=np.float32)
+        s = self.snake        
+        arr[0, s.head.pos[0],s.head.pos[1]] = 1.
+        for bodyPart in s.body:
+            arr[1, bodyPart.pos[0], bodyPart.pos[1]] = 1.
+        arr[2, self.snack.pos[0], self.snack.pos[1]] = 1.
+
+        return arr
+    
+        
+    

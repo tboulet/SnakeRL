@@ -1,0 +1,16 @@
+torch
+torchvision
+torchaudio
+torchsummary
+numpy
+matplotlib
+moviepy
+opencv-python
+pygame
+tkinter
+
+gym
+box2d-py
+pyglet
+imageio-ffmpeg
+wandb
