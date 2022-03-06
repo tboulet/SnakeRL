@@ -1,21 +1,24 @@
-#Snake Tutorial Python
+from time import sleep
 import gym
 import math
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-
 import pygame
-import tkinter as tk
-from tkinter import messagebox
-
 from utils import *
 
-
-PLAYER_TYPE = "IA"
 n_actions = 4
 rows = 5
 width = 500
+
+snackReward = 30
+nothingReward = -1
+deathReward = 0
+delay = 200
+GREEN = (0,255,0)
+RED = (255,0,0)
+
+
 
 class cube(object):    
 
@@ -161,9 +164,6 @@ def drawGrid(w, rows, surface):
  
         pygame.draw.line(surface, (255,255,255), (x,0),(x,w))
         pygame.draw.line(surface, (255,255,255), (0,y),(w,y))
-       
-#  state = readState() 
-
  
  
 def randomSnack(rows, item):
@@ -182,13 +182,6 @@ def randomSnack(rows, item):
  
 
 
-doDelay = False
-snackReward = 30
-nothingReward = -1
-deathReward = 0
-delay = 200
-GREEN = (0,255,0)
-RED = (255,0,0)
 
 class SnakeEnv(gym.Env):
     metadata = {'render.modes': ['human']}
@@ -204,9 +197,7 @@ class SnakeEnv(gym.Env):
         done = False
         s = self.snake
 
-        #Here,  s.move() will call for the policy, given the current state.
         s.move(action)
-
         #If snack meet his own body, the game end.
         for x in range(len(s.body)): 
             if s.body[x].pos in list(map(lambda z:z.pos,s.body[x+1:])):
@@ -215,16 +206,15 @@ class SnakeEnv(gym.Env):
                 done = True
                 break
 
-        #If the snake meet a snack, he gains a piece of body, a new snack is generated and AI get rewarded of 1.
+        #If the snake meet a snack, he gains a piece of body, a new snack is generated and AI get rewarded.
         if not done and s.body[0].pos == self.snack.pos:
-            if len(s.body) >= rows**2 - 2: #If map is full of the body, game end
+            if len(s.body) >= rows**2 - 2: #If map is full of the body, game end.
                 done = True
             s.addCube()
             self.snack = cube(randomSnack(rows, s), color=GREEN)
             reward = snackReward
         else:
             reward = nothingReward
-        # self.redrawWindow()
 
         next_obs = self.readState()
         info = dict()
@@ -243,6 +233,7 @@ class SnakeEnv(gym.Env):
         self.snack.draw(surface)
         drawGrid(width,rows, surface)
         pygame.display.update()
+        sleep(0.02)
     
     def readState(self):
         arr = np.array(np.zeros((3, rows, rows)), dtype=np.float32)
@@ -251,7 +242,6 @@ class SnakeEnv(gym.Env):
         for bodyPart in s.body:
             arr[1, bodyPart.pos[0], bodyPart.pos[1]] = 1.
         arr[2, self.snack.pos[0], self.snack.pos[1]] = 1.
-
         return arr
     
         

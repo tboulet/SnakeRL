@@ -38,7 +38,7 @@ class ACTOR_CRITIC(AGENT):
         metrics : a list of Metrics objects
         **config : a config dictionnary for Actor_Critic
         '''
-        metrics = [MetricS_On_Learn, Metric_Total_Reward]
+        metrics = [MetricS_On_Learn, Metric_Total_Reward, Metric_Count_Episodes]
         super().__init__(config = ACTOR_CRITIC_CONFIG, metrics = metrics)
         self.memory = Memory(MEMORY_KEYS = ['observation', 'action','reward', 'done', 'next_observation'])
         self.step = 0
@@ -58,7 +58,7 @@ class ACTOR_CRITIC(AGENT):
             if self.compute_gain_method == "total_reward_minus_leaky_mean":
                 self.alpha_0 = self.config["alpha_0"] if "alpha_0" in self.config else 1e-2
                 self.V_0 = 0
-        elif self.compute_gain_method in ("state_value", "state_value_centered", "total_future_reward_minus_state_value"):
+        elif self.compute_gain_method in ("state_value", "state_value_centered", "total_future_reward_minus_state_value", "GAE"):
             if V is None:
                 raise Exception(f"Using method {self.compute_gain_method} requires to use state value V.")
             self.use_Q, self.use_V, self.use_A = False, True, False
@@ -176,11 +176,12 @@ class ACTOR_CRITIC(AGENT):
             #Bootstrapping : V(s) = r + gamma * V(s_next) * (1-d) or MC estimation
             criterion = nn.MSELoss()
             with torch.no_grad():
-                V_s_estimated = self.compute_gain(observations, actions, rewards, dones, next_observations, method = "total_future_reward")
+                V_s_estimated = rewards + (1-dones) * self.gamma * self.state_value_target(next_observations)
+                V_s_estimated = V_s_estimated.to(torch.float32)  
             for _ in range(self.gradient_steps_critic):
                 self.opt_critic.zero_grad()
-                V_s = self.state_value(observations)[:, 0]
-                loss_V = criterion(V_s, V_s_estimated)                
+                V_s = self.state_value(observations)
+                loss_V = criterion(V_s, V_s_estimated)         
                 loss_V.backward()
                 if self.clipping is not None:
                     for param in self.state_value.parameters():
@@ -250,6 +251,14 @@ class ACTOR_CRITIC(AGENT):
             V_s = self.state_value(observations)
             G = rewards + (1-dones) * self.gamma * self.state_value(next_observations) - V_s
             G = G[:, 0]
+        elif method == "GAE":
+            delta = (rewards + self.state_value(next_observations) - self.state_value(observations)).detach().numpy()[:, 0]
+            A_GAE = [None for _ in range(ep_lenght - 1)] + [delta[-1]]
+            for u in range(1, ep_lenght):
+                t = ep_lenght - 1 - u
+                A_GAE[t] = self.gamma * self.lmbda * A_GAE[t+1] + delta[t]     
+            G = torch.tensor(A_GAE, dtype=torch.float)
+                       
         elif method == "action_value":
             Q_s_a = self.action_value(observations)
             G = torch.gather(Q_s_a, dim = 1, index=actions)[:, 0]
@@ -267,6 +276,8 @@ class ACTOR_CRITIC(AGENT):
             Q_s_a_weighted = Q_s_a * PI_s_a
             Q_s_mean = torch.sum(Q_s_a_weighted, dim = 1)
             G = total_future_rewards - Q_s_mean
+        
+            
         else:
             raise NotImplementedError("Method for computing gain is not recognized.")   
          

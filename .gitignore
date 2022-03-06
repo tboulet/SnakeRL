@@ -2,7 +2,8 @@ venv*
 models
 rbdl
 videos
-config
+config.py
+CONFIGS.py
 test*
 
 # Byte-compiled / optimized / DLL files

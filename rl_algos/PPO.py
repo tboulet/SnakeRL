@@ -22,23 +22,27 @@ from rl_algos.AGENT import AGENT
 class PPO(AGENT):
     '''PPO updates its networks without changing too much the policy, which increases stability.
     NN trained : Actor Critic
-    Policy used : On-policy
+    Policy used : Off-policy
+    Online : Yes
     Stochastic : Yes
     Actions : discrete (continuous not implemented)
     States : continuous (discrete not implemented)
     '''
 
     def __init__(self, actor : nn.Module, state_value : nn.Module):
-        metrics = [MetricS_On_Learn, Metric_Total_Reward, Metric_Time_Count]
+        metrics = [MetricS_On_Learn, Metric_Total_Reward, Metric_Count_Episodes]
         super().__init__(config = PPO_CONFIG, metrics = metrics)
-        self.memory = Memory(MEMORY_KEYS = ['observation', 'action','reward', 'done', 'next_observation'])
-        self.last_action = None
+        self.memory_transition = Memory(MEMORY_KEYS = ['observation', 'action','reward', 'done', 'prob'])
+        self.memory_episodes = Memory(MEMORY_KEYS = ['episode'])
         
         self.state_value = state_value
         self.state_value_target = deepcopy(state_value)
-        self.opt_critic = optim.Adam(lr = 1e-4, params=self.state_value.parameters())
+        self.opt_critic = optim.Adam(lr = self.learning_rate_critic, params=self.state_value.parameters())
         
         self.policy = actor
+        
+        self.last_prob = None
+        self.episode_ended = False
                 
         
     def act(self, observation, mask = None):
@@ -60,6 +64,7 @@ class PPO(AGENT):
         self.add_metric(mode = 'act')
         
         # Action
+        self.last_prob = probs[0, action].detach()
         return action
 
 
@@ -69,78 +74,85 @@ class PPO(AGENT):
         values = dict()
         self.step += 1
         
-        #We learn once we got enought transitions
-        if self.step % self.timesteps != 0:
+        #Learn every n end of episodes
+        if not self.episode_ended:
+            return
+        self.episode += 1
+        self.episode_ended = False
+        if self.episode % self.train_freq_episode != 0:
             return
         
         #Sample trajectories
-        observations, actions, rewards, dones, next_observations = self.memory.sample(
-            method = "all_shuffled",
+        episodes = self.memory_episodes.sample(
+            method = "last",
+            sample_size=self.n_episodes,
+            as_tensor=False,
             )
+        episodes = episodes[0]
+        
+        #Compute A_s and V_s estimates and concatenate trajectories. 
+        advantages = list()
+        V_targets = list()
+        for observations, actions, rewards, dones, probs in episodes:
+            #Scaling the rewards
+            if self.reward_scaler is not None:
+                rewards = rewards / self.reward_scaler
+            #Compute V and A
+            advantages.append(self.compute_critic(self.compute_advantage_method, observations = observations, rewards = rewards, dones = dones))
+            V_targets = self.compute_TD(rewards, observations)
+        advantages = torch.concat(advantages, axis = 0).detach()
+        V_targets = torch.concat(V_targets, axis = 0).detach()
+        observations, actions, rewards, dones, probs = [torch.concat([episode[elem] for episode in episodes], axis = 0) for elem in range(len(episodes[0]))]
+        
+        #Shuffling data
+        indexes = torch.randperm(len(rewards))
+        observations, actions, rewards, dones, probs, advantages, V_targets = \
+            [element[indexes] for element in [observations, 
+                                            actions, 
+                                            rewards, 
+                                            dones, 
+                                            probs, 
+                                            advantages,
+                                            V_targets,
+                                            ]]
+        
+        #Type bug fixes
         actions = actions.to(dtype = torch.int64)
         rewards = rewards.float()
-        # print(observations.shape, actions, rewards, dones, sep = '\n\n')
-        # raise
-
-        #Scaling the rewards
-        if self.reward_scaler is not None:
-            rewards = rewards / self.reward_scaler
         
         #We perform gradient descent on K epochs on T datas with minibatch of size M <= T.
         policy_new = deepcopy(self.policy)
-        opt_policy = optim.Adam(lr = 1e-4, params=policy_new.parameters())
-        
-        #Compute probability of old policy
-        pi_theta_old_s_a = self.policy(observations)  
-        pi_theta_old_s   = torch.gather(pi_theta_old_s_a, dim = 1, index = actions).detach()
-        
-        n_batch = self.timesteps // self.batch_size
-            
-            
-
-            
-            
-            
-            
-            
+        opt_policy = optim.Adam(lr = self.learning_rate_actor, params=policy_new.parameters())           
+        n_batch = math.ceil(len(observations) / self.batch_size)
+    
         for _ in range(self.epochs):
             for i in range(n_batch):
-                # break
                 #Batching data
                 observations_batch = observations[i * self.batch_size : (i+1) * self.batch_size]
                 actions_batch = actions[i * self.batch_size : (i+1) * self.batch_size]
-                rewards_batch = rewards[i * self.batch_size : (i+1) * self.batch_size]
-                dones_batch = dones[i * self.batch_size : (i+1) * self.batch_size]
-                next_observations_batch = next_observations[i * self.batch_size : (i+1) * self.batch_size]
-                pi_theta_old_s_batch = pi_theta_old_s[i * self.batch_size : (i+1) * self.batch_size]
-                
-                #Advantage function A, using a V value and will be usefull for later
-                V_s_target = rewards_batch + (1 - dones_batch) * self.gamma * self.state_value_target(next_observations_batch)
-                V_s = self.state_value(observations_batch)
-                A_s = V_s_target - V_s
-                A_s = A_s.detach()
-                    
+                probs_batch = probs[i * self.batch_size : (i+1) * self.batch_size]
+                advantages_batch = advantages[i * self.batch_size : (i+1) * self.batch_size]
+                V_targets_batch = V_targets[i * self.batch_size : (i+1) * self.batch_size]
+
                 #Objective function : J_clip = min(r*A, clip(r,1-e,1+e)A)  where r = pi_theta_new/pi_theta_old and A advantage function
                 pi_theta_new_s_a = policy_new(observations_batch)
                 pi_theta_new_s   = torch.gather(pi_theta_new_s_a, dim = 1, index = actions_batch)
-                ratio_s = pi_theta_new_s / pi_theta_old_s_batch
+                ratio_s = pi_theta_new_s / probs_batch
                 ratio_s_clipped = torch.clamp(ratio_s, 1 - self.epsilon_clipper, 1 + self.epsilon_clipper)
-                J_clip = torch.minimum(ratio_s * A_s, ratio_s_clipped * A_s).mean()
+                J_clip = torch.minimum(ratio_s * advantages_batch, ratio_s_clipped * advantages_batch).mean()
 
                 #Error on critic : L = L(V(s), V_target)   with V_target = r + gamma * (1-d) * V_target(s_next)
-                critic_loss = F.smooth_l1_loss(self.state_value(observations_batch), V_s_target.detach()).mean()
+                V_s = self.state_value(observations_batch)
+                critic_loss = F.smooth_l1_loss(V_s, V_targets_batch).mean()
                 
                 #Entropy : H = sum_a(- log(p) * p)      where p = pi_theta(a|s)
                 log_pi_theta_s_a = torch.log(pi_theta_new_s_a)
                 pmlogp_s_a = - log_pi_theta_s_a * pi_theta_new_s_a
                 H_s = torch.sum(pmlogp_s_a, dim = 1)
                 H = H_s.mean()
-                
-                # print(pi_theta_new_s_a.shape, pmlogp_s_a.shape, H_s.shape)
-                # raise
-            
+                            
                 #Total objective function
-                J = 1000*J_clip - self.c_critic * critic_loss + self.c_entropy * H
+                J = J_clip - self.c_critic * critic_loss + self.c_entropy * H
                 loss = - J
                 
                 #Gradient descend
@@ -152,20 +164,18 @@ class PPO(AGENT):
                 
         
         #Update policy
-        with torch.no_grad():
-            self.policy = deepcopy(policy_new)
-            self.memory.__empty__()
-            
-            #Update target network
-            if self.update_method == "periodic":
-                if self.step % self.target_update_interval == 0:
-                    self.state_value_target = deepcopy(self.state_value)
-            elif self.update_method == "soft":
-                for phi, phi_target in zip(self.state_value.parameters(), self.state_value_target.parameters()):
-                    phi_target.data = self.tau * phi_target.data + (1-self.tau) * phi.data    
-            else:
-                print(f"Error : update_method {self.update_method} not implemented.")
-                sys.exit()
+        self.policy = deepcopy(policy_new)
+        
+        #Update target network
+        if self.update_method == "periodic":
+            if self.step % self.target_update_interval == 0:
+                self.state_value_target = deepcopy(self.state_value)
+        elif self.update_method == "soft":
+            for phi, phi_target in zip(self.state_value.parameters(), self.state_value_target.parameters()):
+                phi_target.data = self.tau * phi_target.data + (1-self.tau) * phi.data    
+        else:
+            print(f"Error : update_method {self.update_method} not implemented.")
+            sys.exit()
 
         #Save metrics
         values["critic_loss"] = critic_loss.detach().numpy()
@@ -178,9 +188,16 @@ class PPO(AGENT):
     def remember(self, observation, action, reward, done, next_observation, info={}, **param):
         '''Save elements inside memory.
         *arguments : elements to remember, as numerous and in the same order as in self.memory.MEMORY_KEYS
+        return : metrics, a list of metrics computed during this remembering step.
         '''
-        self.memory.remember((observation, action, reward, done, next_observation))
-        
+        prob = self.last_prob.detach()
+        self.memory_transition.remember((observation, action, reward, done, prob, info))
+        if done:
+            self.episode_ended = True
+            episode = self.memory_transition.sample(method = 'all', as_tensor=True)
+            self.memory_transition.__empty__()
+            self.memory_episodes.remember((episode,))
+            
         #Save metrics
-        values = {"obs" : observation, "action" : action, "reward" : reward, "done" : done, "next_obs" : next_observation}
+        values = {"obs" : observation, "action" : action, "reward" : reward, "done" : done}
         self.add_metric(mode = 'remember', **values)

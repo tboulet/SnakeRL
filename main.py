@@ -81,47 +81,6 @@ def run(agent, env, steps, wandb_cb = True,
     
 
 if __name__ == "__main__":
-    #ENV
-    env = SnakeEnv()
-    n_actions = 4
-    n_flatten = (rows - 2 - 2)**2
-    
-    #ACTOR PI
-    actor =  nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1),     
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(n_flatten * 64, 32),
-            nn.ReLU(),
-            nn.Linear(32, n_actions),
-            nn.Softmax(),
-        )
-    
-    #CRITIC Q
-    action_value =  nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1),     
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(n_flatten * 64, 32),
-            nn.ReLU(),
-            nn.Linear(32, n_actions),
-        )
-
-    #STATE VALUE V
-    state_value = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1),     
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(n_flatten * 64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),
-        )
 
     #AGENT
     dqn = DQN(action_value=action_value)
@@ -130,12 +89,12 @@ if __name__ == "__main__":
     ac = ACTOR_CRITIC(actor = actor, state_value = state_value)
     random_agent = RANDOM_AGENT(2)
     
-    agent = dqn
+    agent = reinforce
     
     #RUN
     run(agent, 
         env = env, 
-        steps=500000, 
-        wandb_cb = False,
-        n_render=20,
+        steps=99999999999, 
+        wandb_cb = True,
+        n_render=200,
         )    
